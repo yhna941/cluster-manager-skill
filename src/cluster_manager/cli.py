@@ -13,11 +13,16 @@ from pydantic import ValidationError
 from . import inventory
 from .discovery import discover
 from .models import Server, SSHConfig
+from .provision import create_group
 from .simulation import DATA
 
-app = typer.Typer(no_args_is_help=True, help="Read-only Linux infrastructure inventory.")
+app = typer.Typer(
+    no_args_is_help=True, help="Linux infrastructure inventory and controlled administration."
+)
 server_app = typer.Typer(no_args_is_help=True)
 app.add_typer(server_app, name="server")
+group_app = typer.Typer(no_args_is_help=True)
+app.add_typer(group_app, name="group")
 
 
 def output(value: Any) -> None:
@@ -119,3 +124,24 @@ def simulate(server: str | None = typer.Option(None)) -> None:
     if server and server not in DATA:
         fail("Unknown simulated server", 2)
     output({"simulation": True, "servers": {server: DATA[server]} if server else DATA})
+
+
+@group_app.command("create")
+def group_create(name: str, server: str = typer.Option(...)) -> None:
+    """Discover, preview, locally approve and create one Linux group."""
+    if not sys.stdin.isatty():
+        fail("A local interactive terminal is required for approval", 2)
+    target = get_server(server)
+    password = getpass.getpass("SSH password: ") if target.ssh.auth == "password" else None
+
+    def approve(plan: dict[str, Any]) -> bool:
+        output({"plan": plan})
+        return typer.confirm("Approve this exact command?", default=False, err=True)
+
+    try:
+        outcome = asyncio.run(create_group(server, target, name, password, approve))
+        output(outcome)
+        if outcome["status"] not in ("verified", "noop"):
+            raise typer.Exit(1)
+    except (asyncssh.Error, OSError, TimeoutError, ValueError, RuntimeError) as exc:
+        fail(f"Group creation failed: {type(exc).__name__}: {exc}")
