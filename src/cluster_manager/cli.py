@@ -17,6 +17,7 @@ from .discovery import discover
 from .inspect import inspect
 from .managed import engine, worker
 from .models import Server, SSHConfig
+from .presentation import render
 from .simulation import DATA, run_scenario
 from .storage import scan
 
@@ -33,8 +34,24 @@ app.add_typer(user_app, name="user")
 app.add_typer(storage_app, name="storage")
 
 
+HUMAN_OUTPUT: bool | None = None
+
+
+@app.callback()
+def display_options(
+    human: bool | None = typer.Option(
+        None, "--human/--json", help="Readable tables or JSON. Defaults to tables in a terminal."
+    ),
+) -> None:
+    global HUMAN_OUTPUT
+    HUMAN_OUTPUT = human
+
+
 def output(value: Any) -> None:
-    typer.echo(json.dumps(value, indent=2, ensure_ascii=False))
+    if HUMAN_OUTPUT if HUMAN_OUTPUT is not None else sys.stdout.isatty():
+        render(value)
+    else:
+        typer.echo(json.dumps(value, indent=2, ensure_ascii=False))
 
 
 def fail(message: str, code: int = 1) -> NoReturn:

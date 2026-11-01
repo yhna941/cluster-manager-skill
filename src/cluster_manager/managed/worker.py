@@ -795,6 +795,49 @@ def inspect_workspaces(roots: list[str], path: str | None = None) -> dict[str, A
     return {"workspace_candidates": rows, "complete": complete, "unreadable_roots": errors}
 
 
+def inspect_files(roots: list[str], path: str) -> dict[str, Any]:
+    """Bounded metadata listing; never follow symlinks or read file contents."""
+    canonical(path)
+    for root in roots:
+        canonical(root)
+    if not any(path == root or path.startswith(root.rstrip("/") + "/") for root in roots):
+        raise Refusal("path is outside registered storage roots")
+    rows = []
+    complete = True
+    with directory(path) as fd, os.scandir(fd) as entries:
+        current = meta(fd)
+        for index, entry in enumerate(entries):
+            if index >= 500:
+                complete = False
+                break
+            try:
+                info = entry.stat(follow_symlinks=False)
+                rows.append(
+                    {
+                        "name": entry.name,
+                        "uid": info.st_uid,
+                        "gid": info.st_gid,
+                        "mode": format(stat.S_IMODE(info.st_mode), "04o"),
+                        "symbolic": stat.filemode(info.st_mode),
+                        "bytes": info.st_size,
+                        "modified": int(info.st_mtime),
+                        "kind": "Directory"
+                        if stat.S_ISDIR(info.st_mode)
+                        else "Symlink"
+                        if stat.S_ISLNK(info.st_mode)
+                        else "File",
+                    }
+                )
+            except OSError:
+                complete = False
+    return {
+        "path": path,
+        "directory": current,
+        "entries": sorted(rows, key=lambda row: row["name"]),
+        "complete": complete,
+    }
+
+
 def samba_users() -> dict[str, Any]:
     state = samba_state()
     if not state.get("available") or not state.get("supported"):
@@ -822,6 +865,8 @@ def main() -> None:
             result = samba_users()
         elif phase == "workspace.inspect":
             result = inspect_workspaces(request["roots"], request.get("path"))
+        elif phase == "files.inspect":
+            result = inspect_files(request["roots"], request["path"])
         elif phase in ("discover", "verify", "execute"):
             op = normalize(request["operation"])
             if phase == "execute":

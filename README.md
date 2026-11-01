@@ -12,7 +12,7 @@ Workspace mode `2775` permits others to read/traverse; choose `2770` to restrict
 
 ## Install and try without servers
 
-Requires Python 3.12+ locally and [uv](https://docs.astral.sh/uv/). Managed hosts require Debian/Ubuntu-compatible Linux tools and Python 3.10+ at `/usr/bin/python3`.
+Requires Python 3.12+ on macOS or Linux locally and [uv](https://docs.astral.sh/uv/). Managed hosts require Debian/Ubuntu-compatible Linux tools and Python 3.10+ at `/usr/bin/python3`.
 
 ```sh
 uv sync --dev
@@ -21,7 +21,7 @@ uv run cluster-manager simulate
 uv run cluster-manager simulate --scenario examples/simulation.yaml
 ```
 
-The simulator never connects to fixture IP addresses. It executes typed operations against in-memory fixture state and labels all results as simulated. Install the standalone executable with `uv tool install .` (use `uv tool upgrade cluster-manager` after upgrading an installed source).
+The simulator never connects to fixture IP addresses. It executes typed operations against in-memory fixture state and labels all results as simulated. Install the standalone executable with `uv tool install .` (use `uv tool install --force .` to upgrade from this checkout).
 
 ## Register and inspect
 
@@ -140,3 +140,43 @@ uv build
 Ordinary tests require no root and no real servers. CI additionally tests actual Linux accounts, permissions and Samba passdb commands in a disposable Ubuntu container with tmpfs storage, checking that existing `smb.conf` is unchanged. See [contributing](CONTRIBUTING.md).
 
 This release intentionally does not edit Samba configuration or install packages. Home migration, recursive ownership changes, ACL mutation, filesystem administration, live SMB login verification, external credential stores, storage history and directory-size aggregation are not implemented. Those are distinct operations and cannot be requested through arbitrary shell input. Multi-step changes are not transactional; inspect partial failures. Read [the security model](docs/security-model.md) before using privileged operations.
+
+### Local dashboard
+
+Install the optional Streamlit interface and launch it:
+
+```bash
+uv sync --extra dashboard
+uv run --extra dashboard cluster-manager-dashboard
+# For an installed CLI: uv tool install --force '.[dashboard]'
+```
+
+Open http://127.0.0.1:8501. The English interface includes server overview,
+filesystem capacity, searchable users/groups, existing Samba shares, saved change
+plans, and audit history. Demo mode uses clearly marked sample data without SSH.
+Live snapshots load only on **Refresh** and show their observation time; failed
+refreshes retain the previous snapshot with an error. SSH key authentication and
+trusted host keys are required for live inspection. No sudo password is requested.
+
+The dashboard binds to loopback and is intended for your own computer. It has no
+multi-user login; do not expose it through a public proxy. It does not execute
+changes or collect account passwords: inspect the plan, copy the displayed CLI
+command, and approve in your terminal. Existing Samba configuration is never edited.
+Streamlit is optional; CLI-only installations need no web dependencies.
+
+**Readable terminal output:** interactive terminals now default to tables. Use
+`cluster-manager --human ...` for readable output in captured sessions, including
+Gemini tool runs, or `cluster-manager --json ...` for scripts. Piped output remains
+JSON by default. The approval prompt presents the operation and exact planned
+steps in tables before accepting the digest-bound approval phrase.
+
+**Workspace permissions:** the Workspaces screen shows owner/UID, group/GID,
+octal and symbolic modes, and covering Samba shares. Inspect a directory beneath
+a registered storage root to list up to 500 files/directories with size, ownership,
+mode, and modification time. Symlinks are listed but never traversed; file contents
+are not read. Results reflect the SSH user's access and do not include ACL rules.
+Workspace candidates are top-level setgid directories, not an exhaustive folder list.
+
+Commit identity is configured locally as `yhna941`. `.mailmap` maps the historical
+`younghwan` identity for compatible Git log tools without rewriting published
+commit IDs; GitHub's original commit metadata is unchanged.
