@@ -213,6 +213,13 @@ def path_state(path: str, missing_ok: bool = False) -> dict[str, int] | None:
         raise Refusal("path is not a safe directory") from exc
 
 
+def xattr_names(path: str) -> list[str]:
+    function = getattr(os, "listxattr", None)
+    if function is None:
+        raise Refusal("ACL feature detection unavailable")
+    return list(function(path))
+
+
 def mount_state(root: str) -> dict[str, Any]:
     # Exact mountpoint required; no writes to a fallback directory on the root disk.
     with open("/proc/self/mountinfo", encoding="utf-8") as stream:
@@ -285,7 +292,7 @@ def storage_state(path: str, roots: list[str], home: bool = False) -> dict[str, 
             raise Refusal("home parents cross a filesystem boundary")
         value.update(parent=parent_info, workspace=workspace)
     acl_parent = parent if home else root
-    if "system.posix_acl_default" in os.listxattr(acl_parent):  # type: ignore[attr-defined]  # Linux worker
+    if "system.posix_acl_default" in xattr_names(acl_parent):
         raise Refusal(
             "default ACL inheritance requires explicit ACL support; refusing implicit change"
         )
@@ -295,7 +302,7 @@ def storage_state(path: str, roots: list[str], home: bool = False) -> dict[str, 
     if not home and value["target"] is not None:
         if value["target"]["uid"] != 0:
             raise Refusal("existing workspace is not owned by root")
-        if any(a.startswith("system.posix_acl_") for a in os.listxattr(path)):  # type: ignore[attr-defined]  # Linux worker
+        if any(a.startswith("system.posix_acl_") for a in xattr_names(path)):
             raise Refusal("existing ACL requires explicit ACL support; refusing chmod mask changes")
         value["usr"] = path_state(path + "/usr", True)
     else:
@@ -330,7 +337,13 @@ def samba_state(username: str | None = None) -> dict[str, Any]:
         and not global_config.get("realm")
         and global_config.get("unix password sync", "no").lower() == "no"
     )
+    db_path = (
+        global_config.get("private dir", "/var/lib/samba/private") + "/passdb.tdb"
+        if backend == "tdbsam"
+        else global_config.get("smb passwd file", "/etc/samba/smbpasswd")
+    )
     result: dict[str, Any] = {
+        "passdb_exists": os.path.exists(db_path),
         "available": True,
         "supported": supported,
         "config_digest": digest(text),
@@ -341,11 +354,6 @@ def samba_state(username: str | None = None) -> dict[str, Any]:
     if username is not None:
         if not supported:
             raise Refusal("Samba is not a supported standalone local-auth server")
-        db_path = (
-            global_config.get("private dir", "/var/lib/samba/private") + "/passdb.tdb"
-            if backend == "tdbsam"
-            else global_config.get("smb passwd file", "/etc/samba/smbpasswd")
-        )
         # pdbedit may initialize an absent database even for -L. Do not do that in discovery.
         users = run(["pdbedit", "-L"]) if os.path.exists(db_path) else ""
         result["user_exists"] = any(
@@ -430,6 +438,32 @@ def snapshot(op: dict[str, Any], roots: list[str]) -> dict[str, Any]:
     return state
 
 
+def observation_commands(op: dict[str, Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+
+    def add(argv: list[str], when: str = "always") -> None:
+        result.append({"argv": argv, "when": when})
+
+    username = op.get("username")
+    if username:
+        add(["getent", "passwd", username])
+        add(["getent", "-s", "files", "passwd", username])
+        add(["passwd", "-S", username], "account exists")
+    names = list(op.get("groups", [])) + ([op["group"]] if "group" in op else [])
+    if op["type"] == "user.create":
+        names.append(username)
+    for name in sorted(set(names)):
+        add(["getent", "group", name])
+        add(["getent", "-s", "files", "group", name])
+    samba = op["type"].startswith("samba.") or op.get("samba") not in (None, False, "off")
+    if samba or op.get("home"):
+        add(["testparm", "-s", "/etc/samba/smb.conf"], "testparm is installed")
+        if samba and username:
+            add(["pdbedit", "-L"], "local passdb already exists")
+            add(["pdbedit", "-L", "-v", "-u", username], "Samba account exists")
+    return result
+
+
 def compile_steps(op: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
     """Pure deterministic compiler. Never accepts executable commands from plan data."""
     op = normalize(op)
@@ -457,6 +491,10 @@ def compile_steps(op: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
             if state["groups"][group] is None:
                 raise Refusal("supplementary group missing: " + group)
         if user is not None:
+            if op["password"] and state.get("password_status") != "P":
+                raise Refusal(
+                    "existing account is locked or lacks a password; use user.password explicitly"
+                )
             expected_home = op["home"] or "/home/" + username
             if user["home"] != expected_home or any(
                 username not in state["groups"][g]["members"]
@@ -529,6 +567,9 @@ def compile_steps(op: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
                     "path": op["path"],
                     "gid": group["gid"],
                     "mode": op["mode"],
+                    "owner": "root",
+                    "recursive": False,
+                    "creates_usr_mode": "2755" if target is None else None,
                 }
             )
         if op.get("samba") == "existing":
@@ -601,6 +642,7 @@ def compile_steps(op: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
         "steps": steps,
         "warnings": warnings,
         "config_diffs": [],
+        "observation_commands": observation_commands(op),
         "verification": "rediscover and compare account, membership, mode, owner and Samba status; no SMB login assertion",
     }
 
@@ -757,7 +799,7 @@ def samba_users() -> dict[str, Any]:
     state = samba_state()
     if not state.get("available") or not state.get("supported"):
         raise Refusal("supported standalone Samba is required")
-    lines = run(["pdbedit", "-L"]).splitlines()
+    lines = run(["pdbedit", "-L"]).splitlines() if state["passdb_exists"] else []
     return {
         "users": [
             {"name": f[0], "uid": f[1]} for line in lines if len(f := line.split(":", 2)) >= 2

@@ -357,3 +357,29 @@ def test_all_samba_operations_have_no_config_write_steps(host):
     host.apply({"type": "samba.user.disable", "username": "alice"})
     assert all(argv[0] in ("useradd", "smbpasswd") for argv, _ in host.commands)
     assert all("/etc/samba/smb.conf" not in argv for argv, _ in host.commands)
+
+
+def test_existing_locked_user_requires_explicit_password_plan(host):
+    host.apply({"type": "user.create", "username": "alice", "password": False})
+    with pytest.raises(worker.Refusal, match="user.password explicitly"):
+        host.apply({"type": "user.create", "username": "alice"})
+
+
+def test_forced_user_parent_share_refuses_private_workspace(host):
+    op = worker.normalize({"type": "workspace.create", "path": "/disk1/RA", "group": "RA"})
+    state = host.state(op, ["/disk1"])
+    state["samba"]["shares"]["disk1"]["force user"] = "root"
+    with pytest.raises(worker.Refusal, match="forces a user"):
+        worker.compile_steps(op, state)
+
+
+def test_readonly_samba_list_does_not_initialize_absent_passdb(monkeypatch):
+    monkeypatch.setattr(
+        worker,
+        "samba_state",
+        lambda: {"available": True, "supported": True, "passdb_exists": False},
+    )
+    monkeypatch.setattr(
+        worker, "run", lambda *args: pytest.fail("pdbedit would initialize database")
+    )
+    assert worker.samba_users() == {"users": []}
