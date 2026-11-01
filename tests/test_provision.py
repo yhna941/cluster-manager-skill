@@ -31,6 +31,8 @@ def test_approval_and_verification_without_network(monkeypatch, tmp_path):
             return None
 
         async def run(self, command, check):
+            if command == "uname -s":
+                return SimpleNamespace(exit_status=0, stdout="Linux\n")
             commands.append(command)
             return SimpleNamespace(exit_status=0 if len(commands) >= 3 else 2)
 
@@ -64,6 +66,8 @@ def test_denial_does_not_mutate(monkeypatch):
             return None
 
         async def run(self, command, check):
+            if command == "uname -s":
+                return SimpleNamespace(exit_status=0, stdout="Linux\n")
             commands.append(command)
             return SimpleNamespace(exit_status=2)
 

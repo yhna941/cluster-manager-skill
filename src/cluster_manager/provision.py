@@ -58,6 +58,9 @@ async def create_group(
     else:
         kwargs.update(preferred_auth="publickey")
     async with asyncssh.connect(server.host, **kwargs) as connection:
+        platform = await asyncio.wait_for(connection.run("uname -s", check=False), 15)
+        if platform.exit_status != 0 or platform.stdout != "Linux\n":
+            raise RuntimeError("remote mutation requires a Linux host")
         before = await asyncio.wait_for(connection.run(check, check=False), 15)
         if before.exit_status == 0:
             return {"status": "noop", "reason": "group already resolves through getent"}

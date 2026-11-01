@@ -11,6 +11,7 @@ import typer
 from pydantic import ValidationError
 
 from . import inventory
+from .accounts import account_operation
 from .discovery import discover
 from .inspect import inspect
 from .models import Server, SSHConfig
@@ -224,3 +225,43 @@ def large_files(
         output({"server": server, "path": path, **result})
     except (asyncssh.Error, OSError, TimeoutError, ValueError, TypeError, RuntimeError) as exc:
         fail(f"Scan failed: {type(exc).__name__}: {exc}")
+
+
+def account_change(name: str, server: str, operation: str) -> None:
+    if not sys.stdin.isatty():
+        fail("A local interactive terminal is required for approval", 2)
+    target = get_server(server)
+    ssh_password = getpass.getpass("SSH password: ") if target.ssh.auth == "password" else None
+
+    def approve(plan: dict[str, Any]) -> bool:
+        output({"plan": plan})
+        return typer.confirm("Approve this exact command?", default=False, err=True)
+
+    def secret() -> str:
+        first = getpass.getpass("New Linux password: ")
+        second = getpass.getpass("Confirm Linux password: ")
+        if first != second:
+            raise ValueError("passwords do not match")
+        return first
+
+    try:
+        result = asyncio.run(
+            account_operation(server, target, name, operation, ssh_password, approve, secret)
+        )
+        output(result)
+        if result["status"] != "verified":
+            raise typer.Exit(1)
+    except (asyncssh.Error, OSError, TimeoutError, ValueError, RuntimeError) as exc:
+        fail(f"Account operation failed: {type(exc).__name__}: {exc}")
+
+
+@user_app.command("create")
+def user_create(name: str, server: str = typer.Option(...)) -> None:
+    """Create a locked local user with no home directory."""
+    account_change(name, server, "user.create")
+
+
+@user_app.command("password")
+def user_password(name: str, server: str = typer.Option(...)) -> None:
+    """Set a local user's password using a hidden terminal prompt."""
+    account_change(name, server, "user.password")
