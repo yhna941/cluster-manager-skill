@@ -15,16 +15,24 @@ from .models import Server
 # Constant code; parameters are separate quoted command arguments, never interpolated into code.
 SCANNER = r"""import heapq,json,os,stat,sys,time
 root=sys.argv[1]; minimum=int(sys.argv[2]); days=int(sys.argv[3]); limit=int(sys.argv[4]); max_entries=int(sys.argv[5]); seconds=int(sys.argv[6]); max_depth=int(sys.argv[7])
-start=time.monotonic(); cutoff=time.time()-days*86400; count=0; errors=0; complete=True; heap=[]; stack=[(root,0)]
+start=time.monotonic(); cutoff=time.time()-days*86400; count=0; errors=0; complete=True; heap=[]; stack=[((),0)]
+rootfd=None
 try:
-    root_stat=os.lstat(root)
-    if not stat.S_ISDIR(root_stat.st_mode) or stat.S_ISLNK(root_stat.st_mode): raise ValueError('root must be a non-symlink directory')
-    device=root_stat.st_dev
+    rootfd=os.open('/',os.O_RDONLY|os.O_DIRECTORY)
+    for part in root.split('/'):
+        if not part: continue
+        child=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=rootfd)
+        os.close(rootfd); rootfd=child
+    device=os.fstat(rootfd).st_dev
     while stack:
         if time.monotonic()-start >= seconds or count >= max_entries: complete=False; break
-        path,depth=stack.pop()
+        parts,depth=stack.pop(); fd=os.dup(rootfd)
         try:
-            with os.scandir(path) as entries:
+            for part in parts:
+                child=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
+                os.close(fd); fd=child
+            if os.fstat(fd).st_dev != device: continue
+            with os.scandir(fd) as entries:
                 for entry in entries:
                     if time.monotonic()-start >= seconds or count >= max_entries: complete=False; break
                     count+=1
@@ -32,17 +40,21 @@ try:
                         info=entry.stat(follow_symlinks=False)
                         if info.st_dev != device or stat.S_ISLNK(info.st_mode): continue
                         if stat.S_ISDIR(info.st_mode):
-                            if depth < max_depth: stack.append((entry.path,depth+1))
+                            if depth < max_depth: stack.append((parts+(entry.name,),depth+1))
                             else: complete=False
                         elif stat.S_ISREG(info.st_mode) and info.st_size >= minimum and (days == 0 or info.st_mtime <= cutoff):
-                            row=(info.st_size,entry.path,info.st_uid,info.st_gid,info.st_mtime,info.st_blocks*512)
+                            path=os.path.join(root,*parts,entry.name)
+                            row=(info.st_size,path,info.st_uid,info.st_gid,info.st_mtime,info.st_blocks*512)
                             if len(heap)<limit: heapq.heappush(heap,row)
                             elif row>heap[0]: heapq.heapreplace(heap,row)
                     except OSError: errors+=1; complete=False
         except OSError: errors+=1; complete=False
+        finally: os.close(fd)
     print(json.dumps({'files':[{'path':p,'size_bytes':s,'allocated_bytes':a,'uid':u,'gid':g,'mtime':m} for s,p,u,g,m,a in sorted(heap,reverse=True)],'entries_scanned':count,'errors':errors,'complete':complete,'elapsed_seconds':round(time.monotonic()-start,3),'review_candidates':days>0}))
 except (OSError,ValueError) as exc:
     print(json.dumps({'error':str(exc),'complete':False})); sys.exit(2)
+finally:
+    if rootfd is not None: os.close(rootfd)
 """
 
 

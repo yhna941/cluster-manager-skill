@@ -11,8 +11,14 @@ license = "Apache-2.0"
 requires-python = ">=3.12"
 dependencies = ["typer>=0.12", "pydantic>=2", "rich>=13", "asyncssh>=2.17", "PyYAML>=6"]
 
+[project.optional-dependencies]
+dashboard = [
+    "streamlit>=1.49,<2",
+]
+
 [project.scripts]
 cluster-manager = "cluster_manager.cli:app"
+cluster-manager-dashboard = "cluster_manager.dashboard:launch"
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.9", "mypy>=1.13", "types-PyYAML"]

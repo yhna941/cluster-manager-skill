@@ -70,3 +70,12 @@ def test_full_simulator_never_connects(monkeypatch):
     assert data["simulation"]
     assert all(r["simulated_verified"] for r in data["results"])
     assert data["state"]["directories"]["/disk1/RA/usr/alice"]["mode"] == 0o700
+
+
+def test_human_output_keeps_json_available():
+    readable = CliRunner().invoke(app, ["--human", "simulate"])
+    assert readable.exit_code == 0, readable.output
+    assert "Simulation" in readable.stdout
+    machine = CliRunner().invoke(app, ["--json", "simulate"])
+    assert machine.exit_code == 0
+    assert json.loads(machine.stdout)["simulation"] is True

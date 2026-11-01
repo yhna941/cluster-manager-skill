@@ -354,12 +354,24 @@ def terminal_approval(plan: Plan) -> None:
         raise worker.Refusal(
             "apply requires a local interactive terminal; piped approval is forbidden"
         )
-    print(plan.model_dump_json(indent=2, exclude={"remote_command"}), flush=True)
+    from ..presentation import render
+
+    render(
+        {
+            "server": plan.server_name,
+            "plan_id": plan.id,
+            "digest": plan.digest,
+            "operation": plan.operation,
+            "preview": plan.preview,
+        },
+        "Review change plan",
+    )
     event(plan.id, Stage.PREVIEW, {"digest": plan.digest})
     required = "approve " + plan.digest[:12]
-    with open("/dev/tty", "r", encoding="utf-8") as tty_in, open(
-        "/dev/tty", "w", encoding="utf-8"
-    ) as tty_out:
+    with (
+        open("/dev/tty", "r", encoding="utf-8") as tty_in,
+        open("/dev/tty", "w", encoding="utf-8") as tty_out,
+    ):
         tty_out.write("Type '" + required + "' to approve this exact plan: ")
         tty_out.flush()
         if tty_in.readline().strip() != required:
@@ -472,7 +484,7 @@ async def samba_inspect(name: str) -> dict[str, Any]:
 
 
 async def inspect_remote(name: str, phase: str, path: str | None = None) -> dict[str, Any]:
-    if phase not in ("workspace.inspect", "samba.users"):
+    if phase not in ("workspace.inspect", "files.inspect", "samba.users"):
         raise worker.Refusal("unsupported inspection")
     server = registered(name)
     async with connect(server) as conn:
