@@ -4,19 +4,20 @@ import asyncio
 import getpass
 import json
 import sys
-from typing import Any
+from pathlib import Path
+from typing import Any, NoReturn
 
 import asyncssh
 import typer
+import yaml
 from pydantic import ValidationError
 
-from . import inventory, plans
-from .accounts import account_operation
+from . import inventory
 from .discovery import discover
 from .inspect import inspect
+from .managed import engine, worker
 from .models import Server, SSHConfig
-from .provision import create_group
-from .simulation import DATA
+from .simulation import DATA, run_scenario
 from .storage import scan
 
 app = typer.Typer(
@@ -36,7 +37,7 @@ def output(value: Any) -> None:
     typer.echo(json.dumps(value, indent=2, ensure_ascii=False))
 
 
-def fail(message: str, code: int = 1) -> None:
+def fail(message: str, code: int = 1) -> NoReturn:
     typer.echo(message, err=True)
     raise typer.Exit(code)
 
@@ -75,10 +76,16 @@ def server_add(
     username: str = typer.Option(...),
     auth: str = typer.Option("key"),
     port: int = typer.Option(22),
+    storage_root: list[str] = typer.Option([], "--storage-root"),
 ) -> None:
     """Confirm and save a nonsecret server record. Does not contact the host."""
     try:
-        server = Server(host=host, port=port, ssh=SSHConfig(username=username, auth=auth))  # type: ignore[arg-type]
+        server = Server(
+            host=host,
+            port=port,
+            ssh=SSHConfig.model_validate({"username": username, "auth": auth}),
+            storage_roots=storage_root,
+        )
         current = inventory.load()
         if name in current.servers:
             fail("Server name already exists", 2)
@@ -126,32 +133,26 @@ def server_check(name: str) -> None:
 
 
 @app.command()
-def simulate(server: str | None = typer.Option(None)) -> None:
+def simulate(
+    server: str | None = typer.Option(None), scenario: Path | None = typer.Option(None)
+) -> None:
     """Show explicitly labeled fixture data, without network access."""
+    if scenario is not None:
+        try:
+            raw = yaml.safe_load(scenario.read_text(encoding="utf-8"))
+            if (
+                not isinstance(raw, dict)
+                or set(raw) != {"server", "operations"}
+                or not isinstance(raw["operations"], list)
+            ):
+                fail("Scenario requires server and operations", 2)
+            output(run_scenario(raw["server"], raw["operations"]))
+            return
+        except (OSError, ValueError, yaml.YAMLError, worker.Refusal) as exc:
+            managed_error(exc)
     if server and server not in DATA:
         fail("Unknown simulated server", 2)
     output({"simulation": True, "servers": {server: DATA[server]} if server else DATA})
-
-
-@group_app.command("create")
-def group_create(name: str, server: str = typer.Option(...)) -> None:
-    """Discover, preview, locally approve and create one Linux group."""
-    if not sys.stdin.isatty():
-        fail("A local interactive terminal is required for approval", 2)
-    target = get_server(server)
-    password = getpass.getpass("SSH password: ") if target.ssh.auth == "password" else None
-
-    def approve(plan: dict[str, Any]) -> bool:
-        output({"plan": plan})
-        return typer.confirm("Approve this exact command?", default=False, err=True)
-
-    try:
-        outcome = asyncio.run(create_group(server, target, name, password, approve))
-        output(outcome)
-        if outcome["status"] not in ("verified", "noop"):
-            raise typer.Exit(1)
-    except (asyncssh.Error, OSError, TimeoutError, ValueError, RuntimeError) as exc:
-        fail(f"Group creation failed: {type(exc).__name__}: {exc}")
 
 
 def run_inspection(server: str, kind: str, name: str | None = None) -> None:
@@ -227,109 +228,240 @@ def large_files(
         fail(f"Scan failed: {type(exc).__name__}: {exc}")
 
 
-def account_change(name: str, server: str, operation: str) -> None:
-    if not sys.stdin.isatty():
-        fail("A local interactive terminal is required for approval", 2)
-    target = get_server(server)
-    ssh_password = getpass.getpass("SSH password: ") if target.ssh.auth == "password" else None
+plan_app = typer.Typer(invoke_without_command=True, no_args_is_help=True)
+workspace_app = typer.Typer(no_args_is_help=True)
+permission_app = typer.Typer(no_args_is_help=True)
+samba_app = typer.Typer(no_args_is_help=True)
+audit_app = typer.Typer(no_args_is_help=True)
+app.add_typer(plan_app, name="plan")
+app.add_typer(workspace_app, name="workspace")
+app.add_typer(permission_app, name="permissions")
+app.add_typer(samba_app, name="samba")
+app.add_typer(audit_app, name="audit")
 
-    def approve(plan: dict[str, Any]) -> bool:
-        output({"plan": plan})
-        return typer.confirm("Approve this exact command?", default=False, err=True)
 
-    def secret() -> str:
-        first = getpass.getpass("New Linux password: ")
-        second = getpass.getpass("Confirm Linux password: ")
-        if first != second:
-            raise ValueError("passwords do not match")
-        return first
+def managed_error(exc: Exception) -> None:
+    # Machine-safe rendering for errors containing remote or filesystem data.
+    typer.echo(json.dumps({"error": str(exc), "type": type(exc).__name__}), err=True)
+    raise typer.Exit(1)
 
+
+def propose(server: str, operation: dict[str, Any]) -> None:
     try:
-        result = asyncio.run(
-            account_operation(server, target, name, operation, ssh_password, approve, secret)
+        plan = asyncio.run(engine.make_plan(server, operation))
+        output(
+            {
+                "plan_id": plan.id,
+                "approved": False,
+                "plan": plan.model_dump(),
+                "next": "cluster-manager apply " + plan.id,
+            }
         )
-        output(result)
-        if result["status"] != "verified":
-            raise typer.Exit(1)
-    except (asyncssh.Error, OSError, TimeoutError, ValueError, RuntimeError) as exc:
-        fail(f"Account operation failed: {type(exc).__name__}: {exc}")
+    except (asyncssh.Error, OSError, TimeoutError, ValueError, worker.Refusal, KeyError) as exc:
+        managed_error(exc)
 
 
-@user_app.command("create")
-def user_create(name: str, server: str = typer.Option(...)) -> None:
-    """Create a locked local user with no home directory."""
-    account_change(name, server, "user.create")
-
-
-@user_app.command("password")
-def user_password(name: str, server: str = typer.Option(...)) -> None:
-    """Set a local user's password using a hidden terminal prompt."""
-    account_change(name, server, "user.password")
-
-
-@group_app.command("plan")
-def group_plan(name: str, server: str = typer.Option(...)) -> None:
-    """Discover and save an unapproved group-creation plan."""
-    target = get_server(server)
-    password = None
-    if target.ssh.auth == "password":
-        if not sys.stdin.isatty():
-            fail("Password authentication requires a local terminal", 2)
-        password = getpass.getpass("SSH password: ")
-    captured: list[dict[str, Any]] = []
-
-    def capture(plan: dict[str, Any]) -> bool:
-        captured.append(plan)
-        return False
-
+@plan_app.callback()
+def plan_file(ctx: typer.Context, file: Path | None = typer.Option(None, "--file")) -> None:
+    """Discover and save a plan from YAML containing server and operation."""
+    if ctx.invoked_subcommand:
+        return
+    if file is None:
+        fail("Provide --file desired.yaml or use plan show PLAN_ID", 2)
     try:
-        result = asyncio.run(create_group(server, target, name, password, capture))
-        if not captured:
-            output(result)
-            return
-        ident = plans.save(captured[0])
-        output({"plan_id": ident, "approved": False, "plan": captured[0]})
-    except (asyncssh.Error, OSError, TimeoutError, ValueError, RuntimeError) as exc:
-        fail(f"Plan failed: {type(exc).__name__}: {exc}")
+        value = yaml.safe_load(file.read_text(encoding="utf-8"))
+        if not isinstance(value, dict) or set(value) != {"server", "operation"}:
+            fail("Desired YAML must contain exactly server and operation", 2)
+        if not isinstance(value["server"], str):
+            fail("server must be a registered server name", 2)
+        propose(value["server"], value["operation"])
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        managed_error(exc)
+
+
+@plan_app.command("show")
+def plan_show(plan_id: str) -> None:
+    try:
+        plan = engine.load(plan_id)
+        output(plan.model_dump())
+    except (OSError, ValueError, worker.Refusal) as exc:
+        managed_error(exc)
 
 
 @app.command("apply")
-def apply_plan(plan_id: str) -> None:
-    """Revalidate a saved group plan and require fresh local approval."""
-    if not sys.stdin.isatty():
-        fail("A local interactive terminal is required for approval", 2)
+def apply_plan(plan_id: str, independent_samba: bool = typer.Option(False)) -> None:
+    """Approve in a local terminal, execute and verify a saved plan."""
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        fail("Apply requires a local interactive terminal", 2)
     try:
-        plan = plans.load(plan_id)
-        name = plan.get("server")
-        if not isinstance(name, str):
-            raise TypeError("invalid server")
-        server = get_server(name)
-        plans.validate(plan, server, name)
-        password = getpass.getpass("SSH password: ") if server.ssh.auth == "password" else None
-
-        def approve(fresh: dict[str, Any]) -> bool:
-            plans.validate(plan, server, name)
-            if any(
-                fresh.get(k) != plan[k]
-                for k in (
-                    "server",
-                    "host",
-                    "port",
-                    "ssh_username",
-                    "group",
-                    "command",
-                    "verification",
-                )
-            ):
-                raise ValueError("fresh plan differs from saved plan")
-            output({"saved_plan_id": plan_id, "saved_digest": plan["digest"], "plan": fresh})
-            confirmed = typer.confirm("Approve this exact command?", default=False, err=True)
-            plans.validate(plan, server, name)
-            return confirmed
-
-        result = asyncio.run(create_group(name, server, plan["group"], password, approve))
+        result = asyncio.run(engine.apply(plan_id, independent_samba))
         output(result)
-        if result["status"] not in ("verified", "noop"):
+        if result.get("status") not in ("verified", "noop"):
             raise typer.Exit(1)
-    except (asyncssh.Error, OSError, TimeoutError, ValueError, TypeError, RuntimeError) as exc:
-        fail(f"Apply failed: {type(exc).__name__}: {exc}")
+    except (asyncssh.Error, OSError, TimeoutError, ValueError, worker.Refusal, KeyError) as exc:
+        managed_error(exc)
+
+
+@app.command("verify")
+def verify_plan(plan_id: str) -> None:
+    try:
+        result = asyncio.run(engine.verify(plan_id))
+        output(result)
+        if not result.get("verified"):
+            raise typer.Exit(1)
+    except (asyncssh.Error, OSError, TimeoutError, ValueError, worker.Refusal, KeyError) as exc:
+        managed_error(exc)
+
+
+@audit_app.command("show")
+def audit_show(plan_id: str) -> None:
+    try:
+        output({"plan_id": plan_id, "events": engine.history(plan_id)})
+    except (OSError, ValueError, worker.Refusal) as exc:
+        managed_error(exc)
+
+
+@group_app.command("create")
+@group_app.command("plan")
+def group_create(name: str, server: str = typer.Option(...)) -> None:
+    propose(server, {"type": "group.create", "group": name})
+
+
+@user_app.command("create")
+def user_create(
+    name: str,
+    server: str = typer.Option(...),
+    group: list[str] = typer.Option([], "--group"),
+    home: str | None = typer.Option(None),
+    password: bool = typer.Option(True),
+    samba: bool = typer.Option(False),
+) -> None:
+    propose(
+        server,
+        {
+            "type": "user.create",
+            "username": name,
+            "groups": group,
+            "home": home,
+            "password": password,
+            "samba": samba,
+        },
+    )
+
+
+@user_app.command("password")
+def user_password(
+    name: str, server: str = typer.Option(...), samba: bool = typer.Option(False)
+) -> None:
+    propose(server, {"type": "user.password", "username": name, "samba": samba})
+
+
+@user_app.command("add-group")
+def user_add_group(name: str, group: str, server: str = typer.Option(...)) -> None:
+    propose(server, {"type": "user.membership", "username": name, "group": group, "action": "add"})
+
+
+@user_app.command("remove-group")
+def user_remove_group(name: str, group: str, server: str = typer.Option(...)) -> None:
+    propose(
+        server, {"type": "user.membership", "username": name, "group": group, "action": "remove"}
+    )
+
+
+@user_app.command("lock")
+def user_lock(name: str, server: str = typer.Option(...)) -> None:
+    propose(server, {"type": "user.lock", "username": name})
+
+
+@user_app.command("unlock")
+def user_unlock(name: str, server: str = typer.Option(...)) -> None:
+    propose(server, {"type": "user.unlock", "username": name})
+
+
+@workspace_app.command("create")
+def workspace_create(
+    server: str = typer.Option(...),
+    path: str = typer.Option(...),
+    group: str = typer.Option(...),
+    mode: str = typer.Option("2775"),
+    samba: str = typer.Option("existing"),
+) -> None:
+    propose(
+        server,
+        {"type": "workspace.create", "path": path, "group": group, "mode": mode, "samba": samba},
+    )
+
+
+@permission_app.command("set")
+def permissions_set(
+    server: str = typer.Option(...),
+    path: str = typer.Option(...),
+    group: str = typer.Option(...),
+    mode: str = typer.Option(...),
+) -> None:
+    propose(server, {"type": "permissions.set", "path": path, "group": group, "mode": mode})
+
+
+@workspace_app.command("list")
+def workspace_list(server: str = typer.Option(...)) -> None:
+    try:
+        output(asyncio.run(engine.inspect_remote(server, "workspace.inspect")))
+    except (asyncssh.Error, OSError, TimeoutError, ValueError, worker.Refusal) as exc:
+        managed_error(exc)
+
+
+@workspace_app.command("inspect")
+@permission_app.command("audit")
+def workspace_inspect(server: str = typer.Option(...), path: str = typer.Option(...)) -> None:
+    try:
+        output(asyncio.run(engine.inspect_remote(server, "workspace.inspect", path)))
+    except (asyncssh.Error, OSError, TimeoutError, ValueError, worker.Refusal) as exc:
+        managed_error(exc)
+
+
+@samba_app.command("shares")
+def samba_shares(server: str = typer.Option(...)) -> None:
+    try:
+        output(asyncio.run(engine.samba_inspect(server)))
+    except (asyncssh.Error, OSError, TimeoutError, ValueError, worker.Refusal) as exc:
+        managed_error(exc)
+
+
+@samba_app.command("users")
+def samba_users(server: str = typer.Option(...)) -> None:
+    try:
+        output(asyncio.run(engine.inspect_remote(server, "samba.users")))
+    except (asyncssh.Error, OSError, TimeoutError, ValueError, worker.Refusal) as exc:
+        managed_error(exc)
+
+
+@samba_app.command("audit")
+def samba_audit(server: str = typer.Option(...), path: str = typer.Option(...)) -> None:
+    try:
+        worker.canonical(path)
+        state = asyncio.run(engine.samba_inspect(server))
+        output(
+            {
+                "config_changes": False,
+                "covering_shares": worker.covering_shares(path, state),
+                "filesystem": asyncio.run(engine.inspect_remote(server, "workspace.inspect", path)),
+                "note": "Share policy and Unix permissions are separate. This does not test an SMB login.",
+            }
+        )
+    except (asyncssh.Error, OSError, TimeoutError, ValueError, worker.Refusal) as exc:
+        managed_error(exc)
+
+
+@samba_app.command("user-add")
+def samba_add(name: str, server: str = typer.Option(...)) -> None:
+    propose(server, {"type": "samba.user.ensure", "username": name})
+
+
+@samba_app.command("password")
+def samba_password(name: str, server: str = typer.Option(...)) -> None:
+    propose(server, {"type": "samba.user.password", "username": name})
+
+
+@samba_app.command("user-disable")
+def samba_disable(name: str, server: str = typer.Option(...)) -> None:
+    propose(server, {"type": "samba.user.disable", "username": name})

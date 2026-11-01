@@ -1,0 +1,7 @@
+server: gpu-01
+operation:
+  type: workspace.create
+  path: /disk2/RA
+  group: RA
+  mode: '2770'
+  samba: existing

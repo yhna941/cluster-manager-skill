@@ -1,0 +1,8 @@
+server: gpu-01
+operation:
+  type: user.create
+  username: alice
+  groups: [RA, smbuser]
+  home: /disk1/RA/usr/alice
+  password: true # Request a local prompt. Never put the password here.
+  samba: true

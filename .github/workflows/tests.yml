@@ -10,3 +10,19 @@ jobs:
       - run: uv run pytest -q
       - run: uv run ruff check .
       - run: uv run mypy src
+  linux-integration:
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:24.04
+      options: --tmpfs /cm-disk:rw,mode=0755 --tmpfs /cm-disk2:rw,mode=0755
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools inside disposable container
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-pytest samba util-linux
+      - name: Exercise real Linux and Samba operations without touching a managed server
+        env:
+          CM_LINUX_INTEGRATION: '1'
+          PYTHONPATH: src
+        run: python3 -m pytest -q tests/integration
