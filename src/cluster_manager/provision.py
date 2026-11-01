@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import os
@@ -23,6 +24,11 @@ def group_commands(name: str) -> tuple[str, str]:
         raise ValueError("Invalid Linux group name")
     quoted = shlex.quote(name)
     return f"getent group {quoted}", f"sudo -n -- groupadd -- {quoted}"
+
+
+def plan_digest(plan: dict[str, Any]) -> str:
+    body = {key: value for key, value in plan.items() if key != "digest"}
+    return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
 
 
 def audit(event: dict[str, Any]) -> None:
@@ -69,9 +75,12 @@ async def create_group(
             "expires_at": int(time.time()) + 300,
             "local_uid": os.getuid(),
         }
-        plan["digest"] = hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()
-        if not approve(plan):
+        plan["digest"] = plan_digest(plan)
+        approved_digest = plan["digest"]
+        if not approve(copy.deepcopy(plan)):
             return {"status": "cancelled", "plan": plan}
+        if plan_digest(plan) != approved_digest or plan["digest"] != approved_digest:
+            raise RuntimeError("Plan changed after approval")
         if time.time() >= plan["expires_at"]:
             raise RuntimeError("Approval expired")
         # Recheck immediately before execution in the same authenticated SSH session.

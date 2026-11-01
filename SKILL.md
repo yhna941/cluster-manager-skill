@@ -8,7 +8,7 @@ description: >
 
 # Cluster Manager
 
-Use the standalone `cluster-manager` CLI for registered Linux servers. Read its `--help` and the README for current capabilities; this version supports local inventory, read-only SSH discovery, and Linux group creation. Do not claim planned features are implemented. Use `cluster-manager server list`, `server show NAME`, `server check NAME`, and `simulate`. Output is JSON; simulator results are explicitly fictional. Probe failures and missing data must be reported, not inferred away.
+Use the standalone `cluster-manager` CLI for registered Linux servers. Read its `--help` and the README for current capabilities; this version supports local inventory, read-only SSH discovery, and Linux group creation. Do not claim planned features are implemented. Use `cluster-manager server list`, `server show NAME`, `server check NAME`, `user list --server NAME`, `user inspect USER --server NAME`, `group list --server NAME`, `group inspect GROUP --server NAME`, `storage summary --server NAME`, `storage inodes --server NAME`, and `simulate`. Output is JSON; simulator results are explicitly fictional. Probe failures and missing data must be reported, not inferred away.
 
 For registration collect nonsecret host, name, SSH username, port and auth method. Run `cluster-manager server add NAME --host HOST --username USER --auth key` in a local interactive terminal. The human confirms locally. Password mode is `--auth password`; credentials are requested only by the CLI at connection time. Never solicit passwords in chat, command arguments, or tool output. Have the user verify the host key out of band and set up known_hosts before a check. Do not connect to an unregistered host or assume registration proves connectivity.
 

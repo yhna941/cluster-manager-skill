@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from . import inventory
 from .discovery import discover
+from .inspect import inspect
 from .models import Server, SSHConfig
 from .provision import create_group
 from .simulation import DATA
@@ -23,6 +24,10 @@ server_app = typer.Typer(no_args_is_help=True)
 app.add_typer(server_app, name="server")
 group_app = typer.Typer(no_args_is_help=True)
 app.add_typer(group_app, name="group")
+user_app = typer.Typer(no_args_is_help=True)
+storage_app = typer.Typer(no_args_is_help=True)
+app.add_typer(user_app, name="user")
+app.add_typer(storage_app, name="storage")
 
 
 def output(value: Any) -> None:
@@ -145,3 +150,49 @@ def group_create(name: str, server: str = typer.Option(...)) -> None:
             raise typer.Exit(1)
     except (asyncssh.Error, OSError, TimeoutError, ValueError, RuntimeError) as exc:
         fail(f"Group creation failed: {type(exc).__name__}: {exc}")
+
+
+def run_inspection(server: str, kind: str, name: str | None = None) -> None:
+    target = get_server(server)
+    password = None
+    if target.ssh.auth == "password":
+        if not sys.stdin.isatty():
+            fail("Password authentication requires a local interactive terminal", 2)
+        password = getpass.getpass("SSH password: ")
+    try:
+        result = asyncio.run(inspect(target, kind, name, password))
+        output({"server": server, "result": result})
+        if result["exit_status"] != 0:
+            raise typer.Exit(1)
+    except (asyncssh.Error, OSError, TimeoutError, ValueError) as exc:
+        fail(f"Inspection failed: {type(exc).__name__}")
+
+
+@user_app.command("list")
+def user_list(server: str = typer.Option(...)) -> None:
+    run_inspection(server, "users")
+
+
+@user_app.command("inspect")
+def user_inspect(name: str, server: str = typer.Option(...)) -> None:
+    run_inspection(server, "user", name)
+
+
+@group_app.command("list")
+def group_list(server: str = typer.Option(...)) -> None:
+    run_inspection(server, "groups")
+
+
+@group_app.command("inspect")
+def group_inspect(name: str, server: str = typer.Option(...)) -> None:
+    run_inspection(server, "group", name)
+
+
+@storage_app.command("summary")
+def storage_summary(server: str = typer.Option(...)) -> None:
+    run_inspection(server, "storage")
+
+
+@storage_app.command("inodes")
+def storage_inodes(server: str = typer.Option(...)) -> None:
+    run_inspection(server, "inodes")

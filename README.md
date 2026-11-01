@@ -28,6 +28,10 @@ uv run cluster-manager server add gpu-01 --host HOST --username USER --auth key
 uv run cluster-manager server list
 uv run cluster-manager server show gpu-01
 uv run cluster-manager server check gpu-01
+uv run cluster-manager user list --server gpu-01
+uv run cluster-manager group inspect RA --server gpu-01
+uv run cluster-manager storage summary --server gpu-01
+uv run cluster-manager storage inodes --server gpu-01
 uv run cluster-manager server remove gpu-01
 ```
 
