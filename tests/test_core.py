@@ -55,3 +55,18 @@ def test_registration_requires_terminal(tmp_path, monkeypatch):
     )
     assert result.exit_code != 0
     assert not (tmp_path / "cluster-manager" / "servers.yaml").exists()
+
+
+def test_full_simulator_never_connects(monkeypatch):
+    import socket
+    from pathlib import Path
+
+    monkeypatch.setattr(socket.socket, "connect", lambda *args: pytest.fail("network access"))
+    result = CliRunner().invoke(
+        app, ["simulate", "--scenario", str(Path(__file__).parents[1] / "examples/simulation.yaml")]
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+    assert data["simulation"]
+    assert all(r["simulated_verified"] for r in data["results"])
+    assert data["state"]["directories"]["/disk1/RA/usr/alice"]["mode"] == 0o700

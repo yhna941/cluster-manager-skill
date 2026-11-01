@@ -21,11 +21,17 @@ class SSHConfig(BaseModel):
         return value
 
 
+class SudoConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    authentication: Literal["interactive", "noninteractive"] = "interactive"
+
+
 class Server(BaseModel):
     model_config = ConfigDict(extra="forbid")
     host: str = Field(min_length=1, max_length=253)
     port: int = Field(default=22, ge=1, le=65535)
     ssh: SSHConfig
+    sudo: SudoConfig = Field(default_factory=SudoConfig)
     storage_roots: list[str] = Field(default_factory=list)
 
     @field_validator("host")

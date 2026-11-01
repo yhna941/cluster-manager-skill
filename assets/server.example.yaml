@@ -1,11 +1,11 @@
 schema_version: 1
 servers:
   gpu-01:
-    host: 10.50.10.86
+    host: 10.50.10.86 # Simulation example, not a test target.
     port: 22
     ssh:
       username: admin1
       auth: key
-    storage_roots:
-      - /disk1
-      - /disk2
+    sudo:
+      authentication: interactive
+    storage_roots: [/disk1, /disk2]

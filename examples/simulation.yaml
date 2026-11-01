@@ -1,0 +1,19 @@
+server: gpu-01
+operations:
+  - type: group.create
+    group: smbuser
+  - type: workspace.create
+    path: /disk2/RA
+    group: RA
+    mode: '2770'
+    samba: existing
+  - type: user.create
+    username: alice
+    groups: [RA, smbuser]
+    home: /disk1/RA/usr/alice
+    password: true
+    samba: true
+  - type: permissions.set
+    path: /disk1/RA
+    group: RA
+    mode: '2770'
