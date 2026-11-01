@@ -10,7 +10,7 @@ import asyncssh
 import typer
 from pydantic import ValidationError
 
-from . import inventory
+from . import inventory, plans
 from .accounts import account_operation
 from .discovery import discover
 from .inspect import inspect
@@ -265,3 +265,71 @@ def user_create(name: str, server: str = typer.Option(...)) -> None:
 def user_password(name: str, server: str = typer.Option(...)) -> None:
     """Set a local user's password using a hidden terminal prompt."""
     account_change(name, server, "user.password")
+
+
+@group_app.command("plan")
+def group_plan(name: str, server: str = typer.Option(...)) -> None:
+    """Discover and save an unapproved group-creation plan."""
+    target = get_server(server)
+    password = None
+    if target.ssh.auth == "password":
+        if not sys.stdin.isatty():
+            fail("Password authentication requires a local terminal", 2)
+        password = getpass.getpass("SSH password: ")
+    captured: list[dict[str, Any]] = []
+
+    def capture(plan: dict[str, Any]) -> bool:
+        captured.append(plan)
+        return False
+
+    try:
+        result = asyncio.run(create_group(server, target, name, password, capture))
+        if not captured:
+            output(result)
+            return
+        ident = plans.save(captured[0])
+        output({"plan_id": ident, "approved": False, "plan": captured[0]})
+    except (asyncssh.Error, OSError, TimeoutError, ValueError, RuntimeError) as exc:
+        fail(f"Plan failed: {type(exc).__name__}: {exc}")
+
+
+@app.command("apply")
+def apply_plan(plan_id: str) -> None:
+    """Revalidate a saved group plan and require fresh local approval."""
+    if not sys.stdin.isatty():
+        fail("A local interactive terminal is required for approval", 2)
+    try:
+        plan = plans.load(plan_id)
+        name = plan.get("server")
+        if not isinstance(name, str):
+            raise TypeError("invalid server")
+        server = get_server(name)
+        plans.validate(plan, server, name)
+        password = getpass.getpass("SSH password: ") if server.ssh.auth == "password" else None
+
+        def approve(fresh: dict[str, Any]) -> bool:
+            plans.validate(plan, server, name)
+            if any(
+                fresh.get(k) != plan[k]
+                for k in (
+                    "server",
+                    "host",
+                    "port",
+                    "ssh_username",
+                    "group",
+                    "command",
+                    "verification",
+                )
+            ):
+                raise ValueError("fresh plan differs from saved plan")
+            output({"saved_plan_id": plan_id, "saved_digest": plan["digest"], "plan": fresh})
+            confirmed = typer.confirm("Approve this exact command?", default=False, err=True)
+            plans.validate(plan, server, name)
+            return confirmed
+
+        result = asyncio.run(create_group(name, server, plan["group"], password, approve))
+        output(result)
+        if result["status"] not in ("verified", "noop"):
+            raise typer.Exit(1)
+    except (asyncssh.Error, OSError, TimeoutError, ValueError, TypeError, RuntimeError) as exc:
+        fail(f"Apply failed: {type(exc).__name__}: {exc}")

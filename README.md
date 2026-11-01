@@ -66,11 +66,15 @@ cluster-manager group create RA --server gpu-01
 
 This checks group existence, displays the exact command and a digest, requires confirmation in a local terminal, checks again, executes, and verifies via `getent`. It needs preconfigured passwordless sudo for `groupadd`; it never changes sudoers or prompts for a sudo password. An audit record is written to `$XDG_STATE_HOME/cluster-manager/audit.jsonl` (default `~/.local/state/cluster-manager/audit.jsonl`). If the connection fails after execution, the outcome can be unknown; inspect the server before retrying.
 
+## Saved group plans
+
+`cluster-manager group plan RA --server gpu-01` discovers the current group state and saves an unapproved plan. `cluster-manager apply PLAN_ID` reconnects, checks the target and plan digest, rechecks remote state, previews the actual command and requires a new local terminal approval. Plans expire after five minutes and cannot authorize unattended execution. Saved plans currently support group creation only.
+
 ## Current scope and roadmap
 
 Implemented: typed validation, atomic local inventory writes, explicit local inventory confirmation, JSON output, strict known-hosts SSH connection, bounded connection and probe timeouts, and simulated fixtures. SSH discovery is sequential and does not use sudo. JSON stdout from `server add` is a proposal; confirmation and status use stderr.
 
-Not implemented: reusable persisted approval plans, most provisioning, interactive sudo, Samba management, workspace management, ACLs, directory-size analysis, historical metrics, audit history, host allowlists, and automated first-use key verification. Group creation, locked local account creation, and local password setting are the only available privileged changes. Future provisioning must enforce preview, approval, authentication, execution and verification independently of any agent. One group may own multiple workspaces identified by host and canonical path; planned default workspace mode is `2775`, and home mode `0700`. setgid alone does not ensure group-writable files. Old mtime is not evidence a file is unused.
+Not implemented: persisted plans for operations other than group creation, most provisioning, interactive sudo, Samba management, workspace management, ACLs, directory-size analysis, historical metrics, audit history, host allowlists, and automated first-use key verification. Group creation, locked local account creation, and local password setting are the only available privileged changes. Future provisioning must enforce preview, approval, authentication, execution and verification independently of any agent. One group may own multiple workspaces identified by host and canonical path; planned default workspace mode is `2775`, and home mode `0700`. setgid alone does not ensure group-writable files. Old mtime is not evidence a file is unused.
 
 ## Development
 
