@@ -1,0 +1,121 @@
+from __future__ import annotations
+
+import asyncio
+import getpass
+import json
+import sys
+from typing import Any
+
+import asyncssh
+import typer
+from pydantic import ValidationError
+
+from . import inventory
+from .discovery import discover
+from .models import Server, SSHConfig
+from .simulation import DATA
+
+app = typer.Typer(no_args_is_help=True, help="Read-only Linux infrastructure inventory.")
+server_app = typer.Typer(no_args_is_help=True)
+app.add_typer(server_app, name="server")
+
+
+def output(value: Any) -> None:
+    typer.echo(json.dumps(value, indent=2, ensure_ascii=False))
+
+
+def fail(message: str, code: int = 1) -> None:
+    typer.echo(message, err=True)
+    raise typer.Exit(code)
+
+
+def get_server(name: str) -> Server:
+    servers = inventory.load().servers
+    if name not in servers:
+        fail(f"Unknown server: {name}", 2)
+    return servers[name]
+
+
+@app.command()
+def init() -> None:
+    """Create an empty local inventory if it does not already exist."""
+    path = inventory.config_path()
+    if not path.exists():
+        inventory.save(inventory.load())
+    output({"inventory": str(path)})
+
+
+@server_app.command("list")
+def server_list() -> None:
+    """List locally registered servers as JSON."""
+    output(inventory.load().model_dump(exclude_none=True))
+
+
+@server_app.command("show")
+def server_show(name: str) -> None:
+    output({"name": name, **get_server(name).model_dump(exclude_none=True)})
+
+
+@server_app.command("add")
+def server_add(
+    name: str,
+    host: str = typer.Option(...),
+    username: str = typer.Option(...),
+    auth: str = typer.Option("key"),
+    port: int = typer.Option(22),
+) -> None:
+    """Confirm and save a nonsecret server record. Does not contact the host."""
+    try:
+        server = Server(host=host, port=port, ssh=SSHConfig(username=username, auth=auth))  # type: ignore[arg-type]
+        current = inventory.load()
+        if name in current.servers:
+            fail("Server name already exists", 2)
+        proposed = current.model_copy(deep=True)
+        proposed.servers[name] = server
+        proposed = type(current).model_validate(proposed.model_dump())
+    except ValidationError as exc:
+        fail(str(exc), 2)
+    output({"proposed_name": name, "server": server.model_dump(exclude_none=True)})
+    if not sys.stdin.isatty():
+        fail("A local interactive terminal is required for confirmation", 2)
+    if not typer.confirm("Save this server registration?", default=False, err=True):
+        fail("Registration cancelled", 2)
+    inventory.save(proposed)
+    typer.echo("Saved. Verify the host key out of band before running server check.", err=True)
+
+
+@server_app.command("remove")
+def server_remove(name: str) -> None:
+    current = inventory.load()
+    if name not in current.servers:
+        fail(f"Unknown server: {name}", 2)
+    if not sys.stdin.isatty() or not typer.confirm(
+        f"Remove {name} from local inventory?", default=False, err=True
+    ):
+        fail("Removal cancelled or no interactive terminal", 2)
+    del current.servers[name]
+    inventory.save(current)
+    output({"removed": name})
+
+
+@server_app.command("check")
+def server_check(name: str) -> None:
+    """Connect using verified known_hosts and collect fixed read-only probes."""
+    server = get_server(name)
+    password = None
+    if server.ssh.auth == "password":
+        if not sys.stdin.isatty():
+            fail("Password authentication requires a local interactive terminal", 2)
+        password = getpass.getpass("SSH password: ")
+    try:
+        output({"server": name, "discovery": asyncio.run(discover(server, password))})
+    except (asyncssh.Error, OSError, TimeoutError) as exc:
+        fail(f"SSH discovery failed: {type(exc).__name__}")
+
+
+@app.command()
+def simulate(server: str | None = typer.Option(None)) -> None:
+    """Show explicitly labeled fixture data, without network access."""
+    if server and server not in DATA:
+        fail("Unknown simulated server", 2)
+    output({"simulation": True, "servers": {server: DATA[server]} if server else DATA})

@@ -1,0 +1,11 @@
+schema_version: 1
+servers:
+  gpu-01:
+    host: 10.50.10.86
+    port: 22
+    ssh:
+      username: admin1
+      auth: key
+    storage_roots:
+      - /disk1
+      - /disk2
