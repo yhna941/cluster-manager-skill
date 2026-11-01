@@ -23,7 +23,7 @@ def test_empty_inventory_and_empty_plans_do_not_connect(ui, monkeypatch):
     monkeypatch.setattr(dashboard_data, "discover", forbidden)
     ui.run()
     assert not ui.exception
-    assert "Add your first server" in ui.info[0].value
+    assert "No registered servers" in ui.info[0].value
     ui.sidebar.radio[0].set_value("Plans & audit").run()
     assert not ui.exception
     assert any("No saved plans" in item.value for item in ui.info)

@@ -124,7 +124,7 @@ def main() -> None:
         st.markdown(
             '<div class="brand"><div class="brand-icon">c</div><div>'
             '<div class="brand-name">cluster</div>'
-            '<div class="brand-sub">Your infrastructure, at a glance</div></div></div>'
+            '<div class="brand-sub">Infrastructure management</div></div></div>'
             '<div class="eyebrow">WORKSPACE</div>',
             unsafe_allow_html=True,
         )
@@ -136,20 +136,20 @@ def main() -> None:
         st.divider()
         demo = st.toggle("Demo mode", value=False)
         st.markdown(
-            '<div class="safety">Local & private<br>Read-only inspections.<br>'
+            '<div class="safety">Local interface<br>Read-only inspections.<br>'
             "Changes require terminal approval.</div>",
             unsafe_allow_html=True,
         )
-    st.markdown('<div class="eyebrow">MY INFRASTRUCTURE</div>', unsafe_allow_html=True)
-    st.title("Your cluster, at a glance" if page == "Overview" else page)
+    st.markdown('<div class="eyebrow">CLUSTER MANAGER</div>', unsafe_allow_html=True)
+    st.title(page)
     st.caption(
         {
-            "Overview": "A little clarity for everything you manage.",
-            "Storage": "Know where your space goes.",
-            "Workspaces": "Every folder. Every owner. Every permission.",
-            "Accounts": "The people and groups behind your workspaces.",
-            "Samba": "Your existing shares, all in one place.",
-            "Plans & audit": "See exactly what changes, before it changes.",
+            "Overview": "Server status and resource usage.",
+            "Storage": "Filesystem capacity and inode usage.",
+            "Workspaces": "File and directory ownership, groups, and permissions.",
+            "Accounts": "Unix users and group membership.",
+            "Samba": "Existing Samba share configuration.",
+            "Plans & audit": "Saved changes and execution history.",
         }[page]
     )
     if demo:
@@ -168,13 +168,13 @@ def main() -> None:
         count = 1
     else:
         if not servers:
-            st.info("Add your first server to get started.")
+            st.info("No registered servers.")
             st.code(
                 "cluster-manager server add research-01 --host HOST --username USER "
                 "--storage-root /disk1",
                 language="bash",
             )
-            st.caption("Or enable Demo mode to explore the dashboard.")
+            st.caption("Demo mode displays sample data.")
             return
         left, right = st.columns([5, 1], vertical_alignment="bottom")
         name = left.selectbox("Server", list(servers))
@@ -200,7 +200,7 @@ def main() -> None:
             snapshot = None
         count = len(servers)
         if snapshot is None:
-            section("Your servers", f"{len(servers)} registered")
+            section("Registered servers", f"{len(servers)} registered")
             columns = st.columns(2)
             for index, (server_name, registered_server) in enumerate(servers.items()):
                 with columns[index % 2]:
@@ -208,7 +208,7 @@ def main() -> None:
                         server_name, registered_server.host, registered_server.storage_roots
                     )
             empty_card(
-                "Ready when you are",
+                "No snapshot loaded",
                 "Choose a server and refresh to see its storage, accounts, and shares.",
             )
             return
@@ -228,10 +228,10 @@ def main() -> None:
         b.metric("Mounted filesystems", len(disks) if disks else "—")
         c.metric("Unix users", len(users) if users else "—")
         d.metric("Samba shares", len(samba.get("shares", {})) if samba.get("available") else "—")
-        section("Your storage", "Capacity at the last refresh")
+        section("Storage usage", "Last observed capacity")
         if not disks:
             empty_card(
-                "No storage data yet", "Refresh to inspect this server’s mounted filesystems."
+                "Storage data unavailable", "Refresh to inspect this server’s mounted filesystems."
             )
         columns = st.columns(2)
         for index, disk in enumerate(disks):
