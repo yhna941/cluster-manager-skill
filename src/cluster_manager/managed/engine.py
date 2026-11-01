@@ -354,13 +354,15 @@ def terminal_approval(plan: Plan) -> None:
         raise worker.Refusal(
             "apply requires a local interactive terminal; piped approval is forbidden"
         )
-    print(plan.model_dump_json(indent=2), flush=True)
+    print(plan.model_dump_json(indent=2, exclude={"remote_command"}), flush=True)
     event(plan.id, Stage.PREVIEW, {"digest": plan.digest})
     required = "approve " + plan.digest[:12]
-    with open("/dev/tty", "r+", encoding="utf-8") as tty:
-        tty.write("Type '" + required + "' to approve this exact plan: ")
-        tty.flush()
-        if tty.readline().strip() != required:
+    with open("/dev/tty", "r", encoding="utf-8") as tty_in, open(
+        "/dev/tty", "w", encoding="utf-8"
+    ) as tty_out:
+        tty_out.write("Type '" + required + "' to approve this exact plan: ")
+        tty_out.flush()
+        if tty_in.readline().strip() != required:
             raise worker.Refusal("approval declined")
     plan.validate_for(registered(plan.server_name))
     event(plan.id, Stage.APPROVE, {"digest": plan.digest, "uid": os.getuid(), "pid": os.getpid()})

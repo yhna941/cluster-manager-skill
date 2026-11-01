@@ -14,6 +14,12 @@ All mutation commands create saved plans. Use `plan --file desired.yaml`, whose 
 
 Do not solicit passwords through conversation or include them in YAML, arguments or output. The CLI prompts for SSH/sudo credentials locally, and for initial account passwords after approval. Linux and Samba initial passwords match by default; `apply --independent-samba` requests separate ones. This does not enable future password synchronization.
 
+## Human-Agent Interaction & Readable Communication
+- **Never dump raw JSON blocks to the user:** Always parse CLI results and present plan previews, inspections, and audit events in a clean, human-readable Markdown summary table (Server, Operation, Target User/Group, Home path, Permissions, and Specific steps).
+- **Pre-flight user account preparation:** Before creating user accounts, proactively ask the user whether they have decided on the initial password scheme and remind them that the terminal will ask for it during `apply`.
+- **Pre-warn interactive prompts:** Whenever invoking an interactive command (e.g., `apply` or `plan`), clearly explain the upcoming terminal prompts in sequence: (1) sudo password prompt (`Tab` to focus), (2) exact approval phrase (`approve <digest[:12]>`), and (3) masked account password prompts.
+- **Readable post-execution report:** After `apply` or `verify`, summarize the verified state in a clean, high-signal table instead of raw CLI terminal dumps.
+
 **Preserve existing Samba configuration.** By default, workspaces use existing parent shares: `/disk1/RA` can be reached through a share already exporting `/disk1`. Do not add a share per group or edit smb.conf/includes. Inspect `samba shares` and `samba audit`; membership may require both the workspace group and the existing share's access group. Add them to each user separately with `user add-group`. Never assume Linux groups can contain other groups. Existing forced-user shares can bypass Unix isolation and may be refused. Missing/incompatible shares are reported for separate operator handling.
 
 Create groups and apply their plans first. Then create workspaces and apply those plans. Finally create users with `--group`, `--home WORKSPACE/usr/USER` and optionally `--samba`. A group may own multiple workspaces; a user has one home. Default workspace mode is 2775; use 2770 when group-only access is requested. Homes are 0700. setgid does not guarantee group-writable new files. Existing data must not be silently reconciled or recursively modified.
