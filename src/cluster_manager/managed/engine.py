@@ -354,7 +354,7 @@ def terminal_approval(plan: Plan) -> None:
         raise worker.Refusal(
             "apply requires a local interactive terminal; piped approval is forbidden"
         )
-    print(plan.model_dump_json(indent=2), flush=True)
+    print(plan.model_dump_json(indent=2, exclude={"remote_command"}), flush=True)
     event(plan.id, Stage.PREVIEW, {"digest": plan.digest})
     required = "approve " + plan.digest[:12]
     with open("/dev/tty", "r", encoding="utf-8") as tty_in, open(

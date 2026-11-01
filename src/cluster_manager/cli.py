@@ -253,7 +253,7 @@ def propose(server: str, operation: dict[str, Any]) -> None:
             {
                 "plan_id": plan.id,
                 "approved": False,
-                "plan": plan.model_dump(),
+                "plan": plan.model_dump(exclude={"remote_command"}),
                 "next": "cluster-manager apply " + plan.id,
             }
         )
