@@ -41,6 +41,14 @@ Before connecting, obtain the server's host-key fingerprint through a trusted ou
 
 `simulate` returns explicitly labeled fixtures and never contacts their example IPs. Server registration itself does not enforce an IP allowlist or inspect connectivity; restrict access using network and SSH controls. Read-only probes may still disclose sensitive host details to the local user.
 
+## Bounded file discovery
+
+```sh
+cluster-manager storage large-files --server gpu-01 --path /disk1 --min-bytes 10737418240 --days 180
+```
+
+Requires Python 3 on the server. The scan stays on the root filesystem, skips symlinks, and defaults to 100,000 entries, 30 seconds, and depth 10. Adjust `--max-entries`, `--seconds`, `--depth`, and `--limit` within the CLI bounds. `complete: false` indicates a limit or an inaccessible directory; interrupted scans can return an error instead of partial data. Results contain numeric UID/GID, apparent and allocated bytes, and mtime. Old files are review candidates, not confirmed unused files. The scan does not delete files.
+
 ## Create a Linux group
 
 ```sh
@@ -53,7 +61,7 @@ This checks group existence, displays the exact command and a digest, requires c
 
 Implemented: typed validation, atomic local inventory writes, explicit local inventory confirmation, JSON output, strict known-hosts SSH connection, bounded connection and probe timeouts, and simulated fixtures. SSH discovery is sequential and does not use sudo. JSON stdout from `server add` is a proposal; confirmation and status use stderr.
 
-Not implemented: reusable persisted approval plans, most provisioning, user passwords, sudo, Samba management, workspace management, ACLs, bounded deep scans, historical metrics, audit history, host allowlists, and automated first-use key verification. Only group creation is currently available as a privileged change. Future provisioning must enforce preview, approval, authentication, execution and verification independently of any agent. One group may own multiple workspaces identified by host and canonical path; planned default workspace mode is `2775`, and home mode `0700`. setgid alone does not ensure group-writable files. Old mtime is not evidence a file is unused.
+Not implemented: reusable persisted approval plans, most provisioning, user passwords, sudo, Samba management, workspace management, ACLs, directory-size analysis, historical metrics, audit history, host allowlists, and automated first-use key verification. Only group creation is currently available as a privileged change. Future provisioning must enforce preview, approval, authentication, execution and verification independently of any agent. One group may own multiple workspaces identified by host and canonical path; planned default workspace mode is `2775`, and home mode `0700`. setgid alone does not ensure group-writable files. Old mtime is not evidence a file is unused.
 
 ## Development
 

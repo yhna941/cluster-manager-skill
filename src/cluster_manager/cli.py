@@ -16,6 +16,7 @@ from .inspect import inspect
 from .models import Server, SSHConfig
 from .provision import create_group
 from .simulation import DATA
+from .storage import scan
 
 app = typer.Typer(
     no_args_is_help=True, help="Linux infrastructure inventory and controlled administration."
@@ -196,3 +197,30 @@ def storage_summary(server: str = typer.Option(...)) -> None:
 @storage_app.command("inodes")
 def storage_inodes(server: str = typer.Option(...)) -> None:
     run_inspection(server, "inodes")
+
+
+@storage_app.command("large-files")
+def large_files(
+    server: str = typer.Option(...),
+    path: str = typer.Option(...),
+    min_bytes: int = typer.Option(0),
+    days: int = typer.Option(0),
+    limit: int = typer.Option(20),
+    max_entries: int = typer.Option(100000),
+    seconds: int = typer.Option(30),
+    depth: int = typer.Option(10),
+) -> None:
+    """Find large files with explicit resource limits; old files are review candidates."""
+    target = get_server(server)
+    password = None
+    if target.ssh.auth == "password":
+        if not sys.stdin.isatty():
+            fail("Password authentication requires a local interactive terminal", 2)
+        password = getpass.getpass("SSH password: ")
+    try:
+        result = asyncio.run(
+            scan(target, path, min_bytes, days, limit, max_entries, seconds, depth, password)
+        )
+        output({"server": server, "path": path, **result})
+    except (asyncssh.Error, OSError, TimeoutError, ValueError, TypeError, RuntimeError) as exc:
+        fail(f"Scan failed: {type(exc).__name__}: {exc}")
